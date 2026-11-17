@@ -699,9 +699,32 @@ xfSvg.addEventListener('pointerup',xfUp);xfSvg.addEventListener('pointercancel',
 /* ---------- chống chạm nhầm khi dùng bút (palm rejection) ---------- */
 let penT=0,penDown=false;
 const palmBlock=e=>S.palm&&e.pointerType==='touch'&&(penDown||performance.now()-penT<2500);
+/* chạm 2 ngón nhanh = hoàn tác, vẫn hoạt động khi bút đang hover/vừa rời (bút không chạm màn hình) */
+const PT=new Map();let PTG=null;
+function palmTap(t,e){
+  const now=performance.now();
+  if(penDown){PT.clear();PTG=null;return}
+  if(t==='pointerdown'){
+    if(PT.size===0)PTG={t0:now,tl:now,max:0,bad:0,act:0};
+    if(!PTG){PT.clear();return}
+    PT.set(e.pointerId,{x:e.clientX,y:e.clientY,x0:e.clientX,y0:e.clientY});
+    PTG.max=Math.max(PTG.max,PT.size);PTG.tl=now;
+    if(PT.size===2)PTG.t1=now;
+    if(PT.size>2||(PT.size===2&&now-PTG.t0>250))PTG.bad=1;
+  }else if(t==='pointermove'){
+    const q=PT.get(e.pointerId);if(!q||!PTG)return;
+    q.x=e.clientX;q.y=e.clientY;
+    if(Math.hypot(q.x-q.x0,q.y-q.y0)>18)PTG.act=1;
+  }else{
+    if(!PT.delete(e.pointerId))return;
+    if(PT.size||!PTG)return;
+    const g=PTG;PTG=null;
+    if(t==='pointerup'&&g.max===2&&!g.bad&&!g.act&&now-g.t0<500)undo();
+  }
+}
 ['pointerdown','pointermove','pointerup','pointercancel'].forEach(t=>stage.addEventListener(t,e=>{
-  if(e.pointerType==='pen'){penT=performance.now();if(t==='pointerdown')penDown=true;if(t==='pointerup'||t==='pointercancel')penDown=false;return}
-  if(palmBlock(e)){e.stopImmediatePropagation();e.preventDefault()}
+  if(e.pointerType==='pen'){penT=performance.now();if(t==='pointerdown'){penDown=true;PT.clear();PTG=null}if(t==='pointerup'||t==='pointercancel')penDown=false;return}
+  if(palmBlock(e)){if(S.palm&&e.pointerType==='touch')palmTap(t,e);e.stopImmediatePropagation();e.preventDefault()}
 },true));
 stage.addEventListener('wheel',e=>{if(S.palm&&penDown)e.stopImmediatePropagation()},true);
 $('#ac-palm').onclick=e=>{S.palm=!S.palm;e.target.textContent='Chặn chạm tay khi dùng bút: '+(S.palm?'Bật':'Tắt')};
@@ -1196,8 +1219,8 @@ function gM(){const p=[...T.values()],n=p.length;return{n,cx:p.reduce((a,q)=>a+q
 function gDown(e){
   if(e.pointerType==='pen')penSeen=true;
   if(e.pointerType!=='touch')return false;
-  const r=stage.getBoundingClientRect();T.set(e.pointerId,{x:e.clientX-r.left,y:e.clientY-r.top});
-  if(!G)G={t0:0,max:0,mv:0,dir:0,sc:0,done:0};
+  const r=stage.getBoundingClientRect();{const x=e.clientX-r.left,y=e.clientY-r.top;T.set(e.pointerId,{x,y,x0:x,y0:y})}
+  if(!G)G={t0:0,max:0,mv:0,dir:0,sc:0,done:0,act:0};
   if(T.size===2&&G.max<2)G.t0=performance.now();
   G.max=Math.max(G.max,T.size);
   if(T.size>1){cancelStroke();const m=gM();Object.assign(G,{d0:m.d,cx:m.cx,cy:m.cy,d:m.d,a:m.a,sx:m.cx,sy:m.cy});stage.setPointerCapture(e.pointerId);return true}
@@ -1207,7 +1230,9 @@ function gMove(e){
   const q=T.get(e.pointerId);if(!q)return false;
   const r=stage.getBoundingClientRect();q.x=e.clientX-r.left;q.y=e.clientY-r.top;
   if(T.size<2)return penSeen;
-  const m=gM(),dx=m.cx-G.cx,dy=m.cy-G.cy;G.mv+=Math.hypot(dx,dy)+Math.abs(m.d-G.d);
+  const m=gM();
+  if(!G.act){let dr=0;T.forEach(p=>dr=Math.max(dr,Math.hypot(p.x-p.x0,p.y-p.y0)));if(dr>18)G.act=1;else if(m.n===2)return true}
+  const dx=m.cx-G.cx,dy=m.cy-G.cy;G.mv+=Math.hypot(dx,dy)+Math.abs(m.d-G.d);
   if(m.n===2&&xf.on){xfPinch(m);xfd=null}
   else if(m.n===2){const ns=clamp(V.s*m.d/G.d,.1,16),da=((m.a-G.a+3*Math.PI)%(2*Math.PI))-Math.PI;G.mv+=Math.abs(da)*60;vXf(ns,V.r+da,G.cx,G.cy,m.cx,m.cy)}
   else if(m.n===3&&!G.done){
@@ -1221,7 +1246,7 @@ function gUp(e){
   if(!T.delete(e.pointerId)||T.size||!G)return;
   if(!xf.on&&G.max===2&&G.d0&&G.d/G.d0<.72&&G.mv>=14&&performance.now()-G.t0<500){G=null;fitAnim();return}
   if(!xf.on&&G.max===2&&G.mv>=14){const q=Math.PI/2,k=Math.round(V.r/q)*q;if(Math.abs(V.r-k)<.09)vXf(V.s,k,G.cx,G.cy,G.cx,G.cy)}
-  if(G.max>=2&&!G.done&&G.mv<14&&performance.now()-G.t0<350){
+  if(G.max>=2&&!G.done&&!G.act&&performance.now()-G.t0<500){
     if(G.max===2)undo();else if(G.max===3)redo();
     else ['#top','#side'].forEach(s=>{const el=$(s);el.style.display=el.style.display==='none'?'':'none'});
   }
