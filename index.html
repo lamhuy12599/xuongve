@@ -698,33 +698,37 @@ xfSvg.addEventListener('pointerup',xfUp);xfSvg.addEventListener('pointercancel',
 
 /* ---------- chống chạm nhầm khi dùng bút (palm rejection) ---------- */
 let penT=0,penDown=false;
-const palmBlock=e=>S.palm&&e.pointerType==='touch'&&(penDown||performance.now()-penT<2500);
-/* chạm 2 ngón nhanh = hoàn tác, vẫn hoạt động khi bút đang hover/vừa rời (bút không chạm màn hình) */
-const PT=new Map();let PTG=null;
-function palmTap(t,e){
-  const now=performance.now();
-  if(penDown){PT.clear();PTG=null;return}
-  if(t==='pointerdown'){
-    if(PT.size===0)PTG={t0:now,tl:now,max:0,bad:0,act:0};
-    if(!PTG){PT.clear();return}
-    PT.set(e.pointerId,{x:e.clientX,y:e.clientY,x0:e.clientX,y0:e.clientY});
-    PTG.max=Math.max(PTG.max,PT.size);PTG.tl=now;
-    if(PT.size===2)PTG.t1=now;
-    if(PT.size>2||(PT.size===2&&now-PTG.t0>250))PTG.bad=1;
-  }else if(t==='pointermove'){
-    const q=PT.get(e.pointerId);if(!q||!PTG)return;
-    q.x=e.clientX;q.y=e.clientY;
-    if(Math.hypot(q.x-q.x0,q.y-q.y0)>18)PTG.act=1;
-  }else{
-    if(!PT.delete(e.pointerId))return;
-    if(PT.size||!PTG)return;
-    const g=PTG;PTG=null;
-    if(t==='pointerup'&&g.max===2&&!g.bad&&!g.act&&now-g.t0<500)undo();
-  }
-}
+/* Nhận biết BÀN TAY tì màn hình (không khóa theo thời gian):
+   - chạm xuống lúc bút đang chạm màn hình (hoặc vừa nhấc <200ms) => tay tì
+   - vùng tiếp xúc lớn (>=40px) => lòng bàn tay
+   - chạm xuống ngay trước khi bút hạ (<350ms) => tay tì, bị loại ngược lại
+   Đã xác định là tay tì thì bỏ qua đến khi nhấc lên. Ngón tay thật vẫn dùng đủ cử chỉ 1-4 ngón,
+   kể cả khi bút đang hover gần màn hình. */
+const PALMID=new Set(),RECENT=new Map();
+const palmBlock=e=>{
+  if(!S.palm||e.pointerType!=='touch')return false;
+  if(PALMID.has(e.pointerId))return true;
+  if(e.type==='pointerdown'&&(penDown||performance.now()-penT<200||Math.max(e.width||0,e.height||0)>=40)){PALMID.add(e.pointerId);return true}
+  return false;
+};
 ['pointerdown','pointermove','pointerup','pointercancel'].forEach(t=>stage.addEventListener(t,e=>{
-  if(e.pointerType==='pen'){penT=performance.now();if(t==='pointerdown'){penDown=true;PT.clear();PTG=null}if(t==='pointerup'||t==='pointercancel')penDown=false;return}
-  if(palmBlock(e)){if(S.palm&&e.pointerType==='touch')palmTap(t,e);e.stopImmediatePropagation();e.preventDefault()}
+  if(e.pointerType==='pen'){
+    if(t==='pointerdown'){
+      penDown=true;penT=performance.now();
+      let hit=false;
+      if(S.palm)RECENT.forEach((t0,id)=>{if(penT-t0<350){PALMID.add(id);T.delete(id);hit=true}});
+      if(hit){RECENT.clear();cancelStroke();if(!T.size)G=null}
+    }else if(t==='pointerup'||t==='pointercancel'){penDown=false;penT=performance.now()}
+    return;
+  }
+  if(e.pointerType!=='touch')return;
+  if(palmBlock(e)){
+    e.stopImmediatePropagation();e.preventDefault();
+    if(t==='pointerup'||t==='pointercancel')PALMID.delete(e.pointerId);
+    return;
+  }
+  if(t==='pointerdown')RECENT.set(e.pointerId,performance.now());
+  else if(t==='pointerup'||t==='pointercancel')RECENT.delete(e.pointerId);
 },true));
 stage.addEventListener('wheel',e=>{if(S.palm&&penDown)e.stopImmediatePropagation()},true);
 $('#ac-palm').onclick=e=>{S.palm=!S.palm;e.target.textContent='Chặn chạm tay khi dùng bút: '+(S.palm?'Bật':'Tắt')};
